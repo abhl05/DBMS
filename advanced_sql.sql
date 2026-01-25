@@ -1063,3 +1063,100 @@ JOIN Dept_Locations DL ON E.DEPARTMENT_ID = DL.DEPARTMENT_ID
 JOIN Dept_Stats DS     ON E.DEPARTMENT_ID = DS.DEPARTMENT_ID
 WHERE DL.COUNTRY_NAME = 'United Kingdom'
   AND E.SALARY > DS.DEPT_AVG_SALARY;
+
+
+
+
+/* ADVANCED ANALYTICAL CTE CHAIN 
+   ---------------------------------------------------------
+   This block calculates analytical metrics needed for:
+   - Ranking employees (Top N per dept)
+   - Calculating Tenure (Years of Service)
+   - Defining Hierarchy (Who is a Manager vs. Individual Contributor)
+   - Analyzing Salary Saturation (Salary vs. Job Limits)
+*/
+
+WITH 
+    -- 1. TENURE_DATA: Calculates years of service for every employee.
+    -- Uses: "Employees working > 10 years", "Hired before year 2000"
+    Tenure_Data AS (
+        SELECT 
+            EMPLOYEE_ID,
+            HIRE_DATE,
+            TRUNC(MONTHS_BETWEEN(SYSDATE, HIRE_DATE) / 12) AS YEARS_OF_SERVICE
+        FROM EMPLOYEES
+    ),
+
+    -- 2. SALARY_RANKINGS: Ranks employees by salary within their department.
+    -- Uses: "2nd highest earner", "Top 3 salaries per dept", "Highest paid in each dept"
+    -- Note: DENSE_RANK handles ties (e.g., two people with same top salary are both Rank 1)
+    Salary_Rankings AS (
+        SELECT 
+            EMPLOYEE_ID,
+            DEPARTMENT_ID,
+            SALARY,
+            DENSE_RANK() OVER (PARTITION BY DEPARTMENT_ID ORDER BY SALARY DESC) AS SALARY_RANK_IN_DEPT
+        FROM EMPLOYEES
+    ),
+
+    -- 3. JOB_HISTORY_STATS: Counts how many times an employee has changed jobs.
+    -- Uses: "Employees who switched jobs > 2 times", "Stable employees (Count = 0)"
+    Job_History_Stats AS (
+        SELECT 
+            EMPLOYEE_ID, 
+            COUNT(*) AS JOBS_CHANGED_COUNT
+        FROM JOB_HISTORY
+        GROUP BY EMPLOYEE_ID
+    ),
+
+    -- 4. ROLE_STATUS: Identifies Managers vs. Non-Managers (Leaf Nodes) and Total Comp.
+    -- Uses: "Find employees who do NOT manage anyone", "Total pay including commission"
+    Role_Status AS (
+        SELECT 
+            E.EMPLOYEE_ID,
+            -- Check if this employee ID appears in the MANAGER_ID column of the table
+            CASE 
+                WHEN E.EMPLOYEE_ID IN (SELECT DISTINCT MANAGER_ID FROM EMPLOYEES WHERE MANAGER_ID IS NOT NULL) 
+                THEN 'Manager' 
+                ELSE 'Individual Contributor' 
+            END AS HIERARCHY_ROLE,
+            -- Calculate total package (Salary + Commission)
+            E.SALARY + (E.SALARY * NVL(E.COMMISSION_PCT, 0)) AS TOTAL_COMPENSATION
+        FROM EMPLOYEES E
+    ),
+
+    -- 5. JOB_SATURATION: Compares current salary against the Min/Max defined for the Job.
+    -- Uses: "Employees at max salary for their role", "Underpaid employees (near min)"
+    Job_Saturation AS (
+        SELECT 
+            E.EMPLOYEE_ID,
+            E.JOB_ID,
+            E.SALARY,
+            J.MIN_SALARY,
+            J.MAX_SALARY,
+            CASE 
+                WHEN E.SALARY >= J.MAX_SALARY THEN 'Capped'
+                WHEN E.SALARY <= J.MIN_SALARY THEN 'Entry Level'
+                ELSE 'Mid Range'
+            END AS SALARY_POSITION
+        FROM EMPLOYEES E
+        JOIN JOBS J ON E.JOB_ID = J.JOB_ID
+    )
+
+-- EXAMPLE USAGE 1: 
+-- "Find the 2nd highest earner in every department who is NOT a manager"
+SELECT E.FIRST_NAME, E.LAST_NAME, E.SALARY, E.DEPARTMENT_ID
+FROM EMPLOYEES E
+JOIN Salary_Rankings SR ON E.EMPLOYEE_ID = SR.EMPLOYEE_ID
+JOIN Role_Status RS     ON E.EMPLOYEE_ID = RS.EMPLOYEE_ID
+WHERE SR.SALARY_RANK_IN_DEPT = 2
+  AND RS.HIERARCHY_ROLE = 'Individual Contributor';
+
+-- EXAMPLE USAGE 2:
+-- "Find 'Capped' employees who have worked more than 10 years"
+SELECT E.LAST_NAME, E.SALARY, T.YEARS_OF_SERVICE
+FROM EMPLOYEES E
+JOIN Job_Saturation JS ON E.EMPLOYEE_ID = JS.EMPLOYEE_ID
+JOIN Tenure_Data T     ON E.EMPLOYEE_ID = T.EMPLOYEE_ID
+WHERE JS.SALARY_POSITION = 'Capped'
+  AND T.YEARS_OF_SERVICE > 10;
