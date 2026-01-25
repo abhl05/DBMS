@@ -985,3 +985,81 @@ GROUP BY D.DEPARTMENT_ID, D.DEPARTMENT_NAME
 HAVING MIN(E.SALARY) > 5000
 AND MAX(E.SALARY) > (SELECT AVG(SALARY) FROM EMPLOYEES)
 AND SUM(CASE WHEN E.EMPLOYEE_ID IN (SELECT EMPLOYEE_ID FROM JOB_HISTORY) THEN 1 ELSE 0 END) >= 1;
+
+
+/* MASTER CTE CHAIN 
+   ---------------------------------------------------------
+   This block calculates common metrics needed for:
+   - Comparing salaries against dept/company averages
+   - Filtering by department size
+   - Checking manager details and job history
+   - Filtering by Location/Country
+*/
+
+WITH 
+    -- 1. COMPANY_STATS: Calculates global aggregates once.
+    -- Useful for: "Salary greater than overall company average"
+    Company_Stats AS (
+        SELECT AVG(SALARY) AS GLOBAL_AVG_SALARY
+        FROM EMPLOYEES
+    ),
+
+    -- 2. DEPT_STATS: Aggregates data by department.
+    -- Useful for: "Dept with > 5 employees", "Salary > Dept Average", "Max salary in dept"
+    Dept_Stats AS (
+        SELECT 
+            DEPARTMENT_ID, 
+            COUNT(*) AS EMP_COUNT,
+            AVG(SALARY) AS DEPT_AVG_SALARY,
+            MIN(SALARY) AS DEPT_MIN_SALARY,
+            MAX(SALARY) AS DEPT_MAX_SALARY
+        FROM EMPLOYEES
+        GROUP BY DEPARTMENT_ID
+    ),
+
+    -- 3. EMP_MANAGER_DATA: Self-joins to get Manager details for every employee.
+    -- Useful for: "Hired before manager", "Earns more than manager", "Manager's hire date"
+    Emp_Manager_Data AS (
+        SELECT 
+            E.EMPLOYEE_ID, 
+            E.LAST_NAME AS EMP_NAME, 
+            E.HIRE_DATE AS EMP_HIRED,
+            E.SALARY AS EMP_SALARY,
+            M.EMPLOYEE_ID AS MGR_ID, 
+            M.LAST_NAME AS MGR_NAME, 
+            M.HIRE_DATE AS MGR_HIRED,
+            M.SALARY AS MGR_SALARY,
+            M.DEPARTMENT_ID AS MGR_DEPT_ID
+        FROM EMPLOYEES E
+        LEFT JOIN EMPLOYEES M ON E.MANAGER_ID = M.EMPLOYEE_ID
+    ),
+
+    -- 4. JOB_HISTORY_FLAG: Identifies employees who have changed jobs.
+    -- Useful for: "Employees with no job history", "At least one employee with history"
+    Job_History_Flag AS (
+        SELECT DISTINCT EMPLOYEE_ID
+        FROM JOB_HISTORY
+    ),
+
+    -- 5. DEPT_LOCATIONS: Pre-joins Department to Location and Country.
+    -- Useful for: "Departments in Toronto", "Managers in US", "Same city as manager"
+    Dept_Locations AS (
+        SELECT 
+            D.DEPARTMENT_ID, 
+            D.DEPARTMENT_NAME, 
+            L.CITY, 
+            C.COUNTRY_NAME
+        FROM DEPARTMENTS D
+        JOIN LOCATIONS L ON D.LOCATION_ID = L.LOCATION_ID
+        JOIN COUNTRIES C ON L.COUNTRY_ID = C.COUNTRY_ID
+    )
+
+-- EXAMPLE USAGE:
+-- Now you can select from these abstract tables easily.
+-- e.g., "Employees in UK earning more than Dept Average"
+SELECT E.LAST_NAME, E.SALARY
+FROM EMPLOYEES E
+JOIN Dept_Locations DL ON E.DEPARTMENT_ID = DL.DEPARTMENT_ID
+JOIN Dept_Stats DS     ON E.DEPARTMENT_ID = DS.DEPARTMENT_ID
+WHERE DL.COUNTRY_NAME = 'United Kingdom'
+  AND E.SALARY > DS.DEPT_AVG_SALARY;
