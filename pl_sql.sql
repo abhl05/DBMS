@@ -511,7 +511,7 @@ UPDATE STUDENTS SET CGPA = CGPA + 0.01 ;
 UPDATE STUDENTS SET CGPA = CGPA - 0.01 ; 
  
 --View the rows inserted by the trigger 
-SELECT * FROM LOG_TABLE_CGPA_UPDATE
+SELECT * FROM LOG_TABLE_CGPA_UPDATE;
 
 -- Problem Example 2
 
